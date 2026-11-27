@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Account Ledger Statement</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .card {
+            background: white;
+            padding: 35px;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 420px;
+            text-align: center;
+        }
+        h2 { margin-top: 0; color: #1a252f; }
+        input {
+            width: 90%;
+            padding: 12px;
+            margin: 15px 0;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 16px;
+            text-align: center;
+        }
+        button {
+            background-color: #0d6efd;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 97%;
+            transition: background 0.2s;
+        }
+        button:hover { background-color: #0b5ed7; }
+        #status { margin-top: 15px; font-size: 14px; min-height: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Account Statement Portal</h2>
+    <p style="color: #666; font-size: 14px;">Enter your Access Code to generate your statement PDF.</p>
+    <input type="text" id="accessCodeInput" placeholder="e.g., ABCD_1234" required>
+    <button onclick="fetchAndGeneratePDF()">Generate Statement PDF</button>
+    <div id="status"></div>
+</div>
+
+<script>
+    const DROPBOX_CSV_URL ="https://dl.dropboxusercontent.com/scl/fi/42ep2esmqipw4gifkwvv4/All_Ledger.CSV?rlkey=8z7v0ravmnyr74tozn0l30j6x&st=8kw4qbfe&dl=1";
+
+    // Built-in CSV parser (handles quoted strings with commas safely—no external library needed)
+    function parseCSV(text) {
+        const rows = [];
+        let row = [], cell = "", inQuotes = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            const next = text[i + 1];
+
+            if (ch === '"') {
+                if (inQuotes && next === '"') {
+                    cell += '"';
+                    i++;
+                } else {
+                    inQuotes = !inQuotes;
+                }
+            } else if (ch === ',' && !inQuotes) {
+                row.push(cell);
+                cell = "";
+            } else if ((ch === '\r' || ch === '\n') && !inQuotes) {
+                if (ch === '\r' && next === '\n') i++;
+                row.push(cell);
+                if (row.some(v => v.trim() !== "")) rows.push(row);
+                row = [];
+                cell = "";
+            } else {
+                cell += ch;
+            }
+        }
+        if (cell !== "" || row.length > 0) {
+            row.push(cell);
+            if (row.some(v => v.trim() !== "")) rows.push(row);
+        }
+
+        if (rows.length < 2) return [];
+        const headers = rows[0].map(h => h.trim().toLowerCase());
+        return rows.slice(1).map(r => {
+            const obj = {};
+            headers.forEach((h, idx) => {
+                obj[h] = r[idx] !== undefined ? r[idx] : "";
+            });
+            return obj;
+        });
+    }
+
+    async function fetchAndGeneratePDF() {
+        const currentInputCode = document.getElementById("accessCodeInput").value.trim();
+        const statusDiv = document.getElementById("status");
+
+        if (!currentInputCode) {
+            statusDiv.style.color = "#dc3545";
+            statusDiv.innerText = "Please enter an Access Code.";
+            return;
+        }
+
+        statusDiv.style.color = "#0d6efd";
+        statusDiv.innerText = "Fetching records from Dropbox...";
+
+        try {
+            const response = await fetch(DROPBOX_CSV_URL, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error("HTTP error " + response.status);
+            }
+
+            const csvText = await response.text();
+            const data = parseCSV(csvText);
+
+            const records = data.filter(row =>
+                row['access_code'] && row['access_code'].trim().toLowerCase() === currentInputCode.toLowerCase()
+            );
+
+            if (records.length > 0) {
+                statusDiv.style.color = "#198754";
+                statusDiv.innerText = `Found ${records.length} record(s). Opening PDF view...`;
+                openPrintableStatement(currentInputCode, records);
+            } else {
+                statusDiv.style.color = "#dc3545";
+                statusDiv.innerText = "No records found for this Access Code.";
+            }
+
+        } catch (error) {
+            console.error("Dropbox Fetch Error:", error);
+            statusDiv.style.color = "#dc3545";
+            statusDiv.innerText = "Error: " + error.message;
+        }
+    }
+
+    function openPrintableStatement(accessCode, records) {
+        const firstRow = records[0];
+        const accHead = (firstRow['acc_head'] || 'Member').trim();
+        const aCode = (firstRow['acode'] || '-').trim();
+        const today = new Date().toLocaleDateString('en-IN');
+
+        const rowsHTML = records.map(row => `
+            <tr>
+                <td>${(row['vrdate'] || '-').trim()}</td>
+                <td>${(row['bookcode'] || '-').trim()}</td>
+                <td>${(row['bookname'] || '-').trim()}</td>
+                <td>${(row['acode'] || '-').trim()}</td>
+                <td>${(row['acc_head'] || '-').trim()}</td>
+                <td>${(row['vrno'] || '-').trim()}</td>
+                <td>${(row['particular'] || '-').trim()}</td>
+                <td class="num">${(row['debit_rs'] || '0').trim()}</td>
+                <td class="num">${(row['credit_rs'] || '0').trim()}</td>
+                <td class="num bold">${(row['cumu_bala'] || '0').trim()}</td>
+            </tr>
+        `).join('');
+
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+            alert("Pop-up blocked! Please allow pop-ups in Chrome to view the PDF statement.");
+            return;
+        }
+
+        printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+		<title>Account Statement</title>
+                <style>
+                    @page { size: A4 landscape; margin: 12mm; }
+                    body { font-family: Arial, sans-serif; color: #222; margin: 0; padding: 10px; }
+                    .header { display: flex; justify-content: space-between; border-bottom: 2px solid #0d6efd; padding-bottom: 10px; margin-bottom: 15px; }
+                    .header h1 { margin: 0 0 5px 0; font-size: 20px; color: #1a252f; }
+                    .meta { font-size: 13px; color: #444; line-height: 1.5; }
+                    table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                    th { background-color: #0d6efd; color: white; padding: 8px 6px; text-align: left; border: 1px solid #0b5ed7; }
+                    td { padding: 6px; border: 1px solid #ccc; vertical-align: top; }
+                    tr:nth-child(even) { background-color: #f9f9f9; }
+                    .num { text-align: right; white-space: nowrap; }
+                    .bold { font-weight: bold; }
+                    @media print { .no-print { display: none; } }
+                </style>
+            </head>
+            <body>
+                <div class="no-print" style="margin-bottom: 15px; background: #e9ecef; padding: 10px; border-radius: 5px; text-align: right;">
+                    <button onclick="window.print()" style="background:#198754; color:white; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-weight:bold;">
+                        Save / Print PDF
+                    </button>
+                </div>
+                <div class="header">
+                    <div>
+			<h1>BARDOLI SANGH</h1>
+                        <h2>Account Ledger Statement</h2>
+                        <div class="meta">
+                            <strong>Access Code:</strong> ${accessCode} &nbsp;|&nbsp;
+                            <strong>Account Code:</strong> ${aCode} &nbsp;|&nbsp;
+                            <strong>Account Head:</strong> ${accHead}
+                        </div>
+                    </div>
+                    <div class="meta" style="text-align: right;">
+                        <strong>Generated On:</strong> ${today}<br>
+                        <strong>Total Entries:</strong> ${records.length}
+                    </div>
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Book</th>
+                            <th>Book Name</th>
+                            <th>A/C Code</th>
+                            <th>Account Head</th>
+                            <th>Vr. No</th>
+                            <th>Particular</th>
+                            <th class="num">Debit (Rs.)</th>
+                            <th class="num">Credit (Rs.)</th>
+                            <th class="num">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rowsHTML}
+                    </tbody>
+                </table>
+            </body>
+            </html>
+        `);
+        printWindow.document.close();
+    }
+</script>
+
+</body>
+</html>
